@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct Document {
     buffer: String,
     crdt: Replica,
-    insert_listener: Option<Box<dyn FnMut(&Insertion)>>,
-    delete_listener: Option<Box<dyn FnMut(&Deletion)>>,
+    insert_listener: Option<Box<dyn FnMut(&Insertion) + Send>>,
+    delete_listener: Option<Box<dyn FnMut(&Deletion) + Send>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -39,11 +39,11 @@ impl Document {
         }
     }
 
-    pub fn insert_listener(&mut self, listener: impl FnMut(&Insertion) + 'static) {
+    pub fn insert_listener(&mut self, listener: impl FnMut(&Insertion) + 'static + Send) {
         self.insert_listener = Some(Box::new(listener));
     }
 
-    pub fn delete_listener(&mut self, listener: impl FnMut(&Deletion) + 'static) {
+    pub fn delete_listener(&mut self, listener: impl FnMut(&Deletion) + 'static + Send) {
         self.delete_listener = Some(Box::new(listener));
     }
 

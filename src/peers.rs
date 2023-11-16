@@ -1,6 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use futures::stream::StreamExt;
@@ -16,7 +17,9 @@ struct MyBehaviour {
 
 pub async fn peers(
     mut local_delete_receiver: UnboundedReceiver<String>,
+    remote_delete_sender: Sender<String>,
     mut local_insert_receiver: UnboundedReceiver<String>,
+    remote_insert_sender: Sender<String>,
 ) -> Result<(), Box<dyn Error>> {
     let mut swarm = libp2p::SwarmBuilder::with_new_identity()
         .with_tokio()
@@ -98,11 +101,20 @@ pub async fn peers(
                     propagation_source: peer_id,
                     message_id: id,
                     message,
-                })) => println!(
+                })) => {
+                    let data_str = String::from_utf8_lossy(&message.data);
+
+                    println!(
                         "Got message: '{}' on topic '{}' with id: {id} from peer: {peer_id}",
-                        &message.topic,
-                        String::from_utf8_lossy(&message.data),
-                    ),
+                        data_str,
+                        &message.topic);
+
+                    if message.topic == insert_topic.hash() {
+                        remote_insert_sender.send(data_str.to_string()).unwrap();
+                    } else if message.topic == delete_topic.hash() {
+                        remote_delete_sender.send(data_str.to_string()).unwrap();
+                    }
+                },
                 SwarmEvent::NewListenAddr { address, .. } => {
                     println!("Local node is listening on {address}");
                 }
