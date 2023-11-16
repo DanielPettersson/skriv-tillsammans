@@ -1,14 +1,18 @@
 use std::cell::RefCell;
-use std::ops::{Deref, DerefMut};
+use std::ops::DerefMut;
 use std::rc::Rc;
+use std::thread;
 
 use dark_light::Mode;
 use eframe::egui::{CentralPanel, Context, ScrollArea, TextEdit, Vec2, Visuals};
 use eframe::{App, Frame, NativeOptions};
+use tokio::sync::mpsc::unbounded_channel;
+use uuid::Uuid;
 
 use crate::document::Document;
 
 mod document;
+mod peers;
 
 fn main() -> eframe::Result<()> {
     let native_options = NativeOptions {
@@ -30,8 +34,7 @@ fn main() -> eframe::Result<()> {
 }
 
 struct SkrivTillsammansApp {
-    doc1: Rc<RefCell<Document>>,
-    doc2: Rc<RefCell<Document>>,
+    doc: Rc<RefCell<Document>>,
 }
 
 impl SkrivTillsammansApp {
@@ -42,57 +45,45 @@ impl SkrivTillsammansApp {
             Mode::Default => ctx.egui_ctx.set_visuals(Visuals::default()),
         }
 
-        let doc1 = Rc::new(RefCell::new(Document::new("", 1)));
-        let doc2 = Rc::new(RefCell::new(doc1.borrow().fork(2)));
+        let uuid = Uuid::new_v4();
+        let replica_id = uuid.as_u64_pair().1;
+        let doc = Rc::new(RefCell::new(Document::new("", replica_id)));
 
-        let doc2_i = doc2.clone();
-        doc1.borrow_mut().insert_listener(move |i| {
-            doc2_i.borrow_mut().integrate_insertion(i);
-            println!("{}", serde_json::to_string_pretty(i).unwrap());
+        let (local_delete_sender, local_delete_receiver) = unbounded_channel();
+        let (local_insert_sender, local_insert_receiver) = unbounded_channel();
+
+        thread::spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    peers::peers(local_delete_receiver, local_insert_receiver).await
+                })
+                .unwrap();
         });
-        let doc2_d = doc2.clone();
-        doc1.borrow_mut()
-            .delete_listener(move |d| doc2_d.borrow_mut().integrate_deletion(d));
 
-        let doc1_i = doc1.clone();
-        doc2.borrow_mut()
-            .insert_listener(move |i| doc1_i.borrow_mut().integrate_insertion(i));
-        let doc1_d = doc1.clone();
-        doc2.borrow_mut()
-            .delete_listener(move |d| doc1_d.borrow_mut().integrate_deletion(d));
+        doc.borrow_mut().insert_listener(move |i| {
+            let json = serde_json::to_string(i).unwrap();
+            local_insert_sender.send(json).unwrap()
+        });
+        doc.borrow_mut().delete_listener(move |d| {
+            let json = serde_json::to_string(d).unwrap();
+            local_delete_sender.send(json).unwrap()
+        });
 
-        SkrivTillsammansApp { doc1, doc2 }
+        SkrivTillsammansApp { doc }
     }
 }
 
 impl App for SkrivTillsammansApp {
     fn update(&mut self, ctx: &Context, _: &mut Frame) {
         CentralPanel::default().show(ctx, |ui| {
-            ui.columns(2, |ui| {
-                ScrollArea::both()
-                    .id_source("scroll1")
-                    .show(&mut ui[0], |ui| {
-                        ui.add(
-                            TextEdit::multiline(self.doc1.borrow_mut().deref_mut()).min_size(
-                                Vec2 {
-                                    x: 0.,
-                                    y: ui.available_height(),
-                                },
-                            ),
-                        );
-                    });
-                ScrollArea::both()
-                    .id_source("scroll2")
-                    .show(&mut ui[1], |ui| {
-                        ui.add(
-                            TextEdit::multiline(self.doc2.borrow_mut().deref_mut()).min_size(
-                                Vec2 {
-                                    x: 0.,
-                                    y: ui.available_height(),
-                                },
-                            ),
-                        );
-                    });
+            ScrollArea::both().show(ui, |ui| {
+                ui.add(
+                    TextEdit::multiline(self.doc.borrow_mut().deref_mut())
+                        .min_size(ui.available_size()),
+                );
             });
         });
     }
