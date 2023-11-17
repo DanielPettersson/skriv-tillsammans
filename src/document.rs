@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use cola::{Deletion, Replica, ReplicaId};
+use cola::{Deletion, EncodedReplica, Replica, ReplicaId};
 use eframe::egui::TextBuffer;
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +9,12 @@ pub struct Document {
     crdt: Replica,
     insert_listener: Option<Box<dyn FnMut(&Insertion) + Send>>,
     delete_listener: Option<Box<dyn FnMut(&Deletion) + Send>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EncodedDocument {
+    buffer: String,
+    encoded_replica: EncodedReplica,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -34,6 +40,25 @@ impl Document {
         Document {
             buffer: self.buffer.clone(),
             crdt,
+            insert_listener: None,
+            delete_listener: None,
+        }
+    }
+
+    pub fn encode(&self) -> String {
+        serde_json::to_string(&EncodedDocument {
+            buffer: self.buffer.clone(),
+            encoded_replica: self.crdt.encode(),
+        })
+        .unwrap()
+    }
+
+    pub fn decode(new_replica_id: ReplicaId, data: &str) -> Self {
+        let encoded_document: EncodedDocument = serde_json::from_str(data).unwrap();
+        let replica = Replica::decode(new_replica_id, &encoded_document.encoded_replica).unwrap();
+        Document {
+            buffer: encoded_document.buffer,
+            crdt: replica,
             insert_listener: None,
             delete_listener: None,
         }
