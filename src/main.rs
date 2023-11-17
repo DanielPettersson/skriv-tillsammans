@@ -46,8 +46,10 @@ impl SkrivTillsammansApp {
         }
 
         let uuid = Uuid::new_v4();
-        let replica_id = uuid.as_u64_pair().1;
-        let doc = Arc::new(Mutex::new(Document::new("", replica_id)));
+        let replica_id = (uuid.as_u128() / 2) as u64;
+
+        let initial_doc_data = include_str!("doc.json");
+        let doc = Arc::new(Mutex::new(Document::decode(replica_id, initial_doc_data)));
 
         let (local_delete_sender, local_delete_receiver) = unbounded_channel();
         let (local_insert_sender, local_insert_receiver) = unbounded_channel();
