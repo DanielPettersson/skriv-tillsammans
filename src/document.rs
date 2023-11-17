@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use std::ops::Range;
 
-use cola::{Deletion, EncodedReplica, Replica, ReplicaId};
+use cola::{Deletion, EncodedReplica, Length, Replica, ReplicaId, Text};
 use eframe::egui::TextBuffer;
 use serde::{Deserialize, Serialize};
 
 pub struct Document {
     buffer: String,
     crdt: Replica,
+    backlogged_insertions: HashMap<Text, String>,
     insert_listener: Option<Box<dyn FnMut(&Insertion) + Send>>,
     delete_listener: Option<Box<dyn FnMut(&Deletion) + Send>>,
 }
@@ -30,6 +32,7 @@ impl Document {
         Document {
             buffer,
             crdt,
+            backlogged_insertions: HashMap::new(),
             insert_listener: None,
             delete_listener: None,
         }
@@ -40,6 +43,7 @@ impl Document {
         Document {
             buffer: self.buffer.clone(),
             crdt,
+            backlogged_insertions: HashMap::new(),
             insert_listener: None,
             delete_listener: None,
         }
@@ -59,6 +63,7 @@ impl Document {
         Document {
             buffer: encoded_document.buffer,
             crdt: replica,
+            backlogged_insertions: HashMap::new(),
             insert_listener: None,
             delete_listener: None,
         }
@@ -72,40 +77,77 @@ impl Document {
         self.delete_listener = Some(Box::new(listener));
     }
 
-    pub fn insert<S: Into<String>>(&mut self, insert_at: usize, text: S) -> Insertion {
-        let text = text.into();
-        self.buffer.insert_str(insert_at, &text);
-        let crdt = self.crdt.inserted(insert_at, text.len());
-        let insertion = Insertion { text, crdt };
+    pub fn insert<S: Into<String>>(&mut self, insert_at: usize, text: S) {
+        if self.buffer.is_char_boundary(insert_at) {
+            let text = text.into();
+            self.buffer.insert_str(insert_at, &text);
+            let crdt = self.crdt.inserted(insert_at, text.len());
+            let insertion = Insertion { text, crdt };
 
-        if let Some(l) = &mut self.insert_listener {
-            l(&insertion)
+            if let Some(l) = &mut self.insert_listener {
+                l(&insertion)
+            }
         }
-
-        insertion
     }
 
-    pub fn delete(&mut self, range: Range<usize>) -> Deletion {
-        self.buffer.replace_range(range.clone(), "");
-        let deletion = self.crdt.deleted(range);
+    pub fn delete(&mut self, range: Range<usize>) {
+        if self.buffer.get(range.clone()).is_some() && !range.is_empty() {
+            self.buffer.replace_range(range.clone(), "");
+            let deletion = self.crdt.deleted(range);
 
-        if let Some(l) = &mut self.delete_listener {
-            l(&deletion)
+            if let Some(l) = &mut self.delete_listener {
+                l(&deletion)
+            }
         }
-
-        deletion
     }
 
     pub fn integrate_insertion(&mut self, insertion: &Insertion) {
         if let Some(offset) = self.crdt.integrate_insertion(&insertion.crdt) {
-            self.buffer.insert_str(offset, &insertion.text);
+            if self.buffer.is_char_boundary(offset) {
+                self.buffer.insert_str(offset, &insertion.text);
+            }
+        } else {
+            self.backlogged_insertions
+                .insert(insertion.crdt.text().clone(), insertion.text.clone());
+            self.integrate_backlog();
         }
     }
 
     pub fn integrate_deletion(&mut self, deletion: &Deletion) {
-        let ranges = self.crdt.integrate_deletion(&deletion);
+        let ranges = self.crdt.integrate_deletion(deletion);
+
+        if ranges.is_empty() {
+            self.integrate_backlog();
+        } else {
+            Document::delete_from_buffer(&mut self.buffer, ranges);
+        }
+    }
+
+    fn integrate_backlog(&mut self) {
+        for insertion in self.crdt.backlogged_insertions() {
+            let text = insertion.0;
+            let offset = insertion.1;
+
+            if self.buffer.is_char_boundary(offset) {
+                if let Some(t) = self.backlogged_insertions.get(&text) {
+                    self.buffer.insert_str(offset, t);
+                    self.backlogged_insertions.remove(&text);
+                }
+            }
+        }
+
+        let deletions = self.crdt.backlogged_deletions();
+
+        for deletion in deletions {
+            Document::delete_from_buffer(&mut self.buffer, deletion);
+        }
+    }
+
+    fn delete_from_buffer(buffer: &mut String, ranges: Vec<Range<Length>>) {
         for range in ranges.into_iter().rev() {
-            self.buffer.replace_range(range, "");
+            if buffer.get(range.clone()).is_some() {
+                buffer.replace_range(range, "");
+            }
         }
     }
 }

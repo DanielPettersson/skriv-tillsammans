@@ -104,15 +104,15 @@ pub async fn peers(
                 })) => {
                     let data_str = String::from_utf8_lossy(&message.data);
 
-                    println!(
-                        "Got message: '{}' on topic '{}' with id: {id} from peer: {peer_id}",
-                        data_str,
-                        &message.topic);
-
                     if message.topic == insert_topic.hash() {
                         remote_insert_sender.send(data_str.to_string()).unwrap();
                     } else if message.topic == delete_topic.hash() {
                         remote_delete_sender.send(data_str.to_string()).unwrap();
+                    } else {
+                       println!(
+                        "Got message on unknown topic '{}' with id: {id} from peer: {peer_id}",
+                        &message.topic);
+
                     }
                 },
                 SwarmEvent::NewListenAddr { address, .. } => {
