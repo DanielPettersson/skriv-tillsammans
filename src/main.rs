@@ -115,7 +115,7 @@ impl App for SkrivTillsammansApp {
         CentralPanel::default().show(ctx, |ui| {
             ScrollArea::both().show(ui, |ui| {
                 let mut doc = self.doc.lock().unwrap();
-                ui.add(TextEdit::multiline(&mut *doc).min_size(ui.available_size()));
+                ui.add_sized(ui.available_size(), TextEdit::multiline(&mut *doc));
             });
         });
     }
